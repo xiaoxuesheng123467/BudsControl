@@ -124,8 +124,8 @@ struct DashboardView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .disabled(!bridge.canControl || mode == .adaptive)
-                    .opacity(bridge.canControl && mode != .adaptive ? 1 : 0.52)
+                    .disabled(!bridge.canControl)
+                    .opacity(bridge.canControl ? 1 : 0.52)
                 }
             }
 
@@ -138,7 +138,7 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("自动切换到环境声")
                             .font(.subheadline.weight(.semibold))
-                        Text("关闭")
+                        Text(bridge.settings.voiceDetectEnabled ? "已开启" : "关闭")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -285,6 +285,10 @@ struct DashboardView: View {
                 NavigationLink { AdvancedFeaturesView() } label: {
                     menuRow("高级功能", symbol: "gearshape.2")
                 }
+                Divider().padding(.leading, 50)
+                NavigationLink { VerificationCenterView() } label: {
+                    menuRow("验证中心", symbol: "checkmark.circle.badge.questionmark")
+                }
             }
         }
     }
@@ -348,6 +352,7 @@ struct DashboardView: View {
     private var statusSymbol: String {
         switch bridge.phase {
         case .ready: "checkmark.seal.fill"
+        case .demo: "testtube.2"
         case .searching: "dot.radiowaves.left.and.right"
         case .connecting: "link.badge.plus"
         case .pairing: "key.fill"
@@ -358,6 +363,7 @@ struct DashboardView: View {
     private var statusColor: Color {
         switch bridge.phase {
         case .ready: accent
+        case .demo: .purple
         case .searching, .connecting: .blue
         case .pairing, .unavailable: .orange
         }

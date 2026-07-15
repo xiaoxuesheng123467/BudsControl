@@ -4,7 +4,7 @@ BudsControl is an unofficial iPhone controller for Galaxy Buds3 Pro. It reproduc
 
 ![BudsControl running on an iPhone](Screenshots/buds-control-iphone.png)
 
-The current build has been tested on a physical SM-R630. The earbuds acknowledged noise-control and equalizer commands, and the app read the left, right, and case battery levels. This is a personal Xcode build, not an App Store release.
+The original control path has been tested on a physical SM-R630. The earbuds acknowledged noise-control and equalizer commands, and the app read the left, right, and case battery levels. Version 0.2.0 adds protocol-mapped controls that still need a second physical-earbud validation pass. This is a personal Xcode build, not an App Store release.
 
 ## Working features
 
@@ -18,8 +18,16 @@ The current build has been tested on a physical SM-R630. The earbuds acknowledge
 | Mac discovery | Bonjour on the local network |
 | Bridge authentication | TLS 1.2 PSK with a rotating 128-bit secret |
 | CoreBluetooth diagnostics | Manual, read-only probe with exportable logs |
+| Adaptive noise control | Protocol mapped; physical validation pending |
+| Ambient level and left/right customization | Protocol mapped; physical validation pending |
+| Voice detect, timeout, and one-ear noise control | Protocol mapped; physical validation pending |
+| Touch lock, gesture toggles, long-pinch actions, and noise cycles | Protocol mapped; physical validation pending |
+| Stereo balance, seamless connection, call path, and sidetone | Protocol mapped; physical validation pending |
+| Fit test and Find My Earbuds | Protocol mapped; physical validation pending |
+| Remember last settings | Stored locally after a successful command; corrected by live earbud state |
+| Offline demo and command report | Exercises every screen without hardware and exports packet/result logs |
 
-Adaptive noise control, the 9-band custom EQ, gestures, Blade Light, voice detection, firmware updates, and Samsung account features remain locked. Their screens are present so the app can grow without pretending those controls work today.
+Blade Light writes, 9-band custom EQ, firmware updates, Samsung account services, and compound voice-model settings remain unavailable. The app can read several of these values from the earbuds, but it does not send guessed payloads. Adaptive volume and siren detection are behind an explicit experimental-command switch because only their message IDs are currently corroborated.
 
 ## Why the Mac bridge exists
 
@@ -53,7 +61,7 @@ xcodegen generate
 
 ## Validation
 
-The packet verifier checks the CRC and byte layout for ANC, ambient sound, noise control off, dynamic EQ, and the state request:
+The packet verifier checks the CRC and byte layout for the hardware-verified commands and prints every newly mapped command packet:
 
 ```sh
 xcrun swiftc BudsControl/Sources/BudsProtocol.swift Tools/ProtocolVerifier/main.swift -o /tmp/BudsProtocolVerifier
@@ -73,6 +81,18 @@ The bridge also contains a local TLS probe for development builds:
 BudsBridge --probe-port <port> --pairing-code <secret>
 ```
 
+Its protocol self-test validates the Objective-C command allowlist, packet bytes, and rejection cases without connecting earbuds:
+
+```sh
+BudsBridge --protocol-self-test
+```
+
+## Hardware validation in 0.2.0
+
+Open **验证中心** in the iPhone app. Offline demo mode exercises the complete UI without a Mac or earbuds. With real hardware connected, each command is logged as either `耳机 ACK`, `已写入`, or `失败`, together with its full packet. Export the report after testing so an uncertain mapping can be fixed without repeating every control.
+
+The app remembers settings only after a command succeeds. On the next launch it shows those saved values immediately, then replaces individual fields when BudsBridge receives a newer extended-status packet from the earbuds. It does not blindly replay every setting on reconnect.
+
 ## Protocol notes
 
 Samsung messages use the frame below. CRC is CRC-16/CCITT with polynomial `0x1021` and initial value `0`, calculated over the message ID and payload.
@@ -81,7 +101,7 @@ Samsung messages use the frame below. CRC is CRC-16/CCITT with polynomial `0x102
 FD | size (little endian) | message ID | payload | CRC16 (little endian) | DD
 ```
 
-The implementation was written for this project from observed protocol behavior and published protocol documentation. [GalaxyBudsClient](https://github.com/timschneeb/GalaxyBudsClient) was an important reference for service UUIDs and message semantics. No source file from that GPL-3.0 project is included here.
+The implementation was written for this project from observed protocol behavior and published protocol documentation. [GalaxyBudsClient](https://github.com/timschneeb/GalaxyBudsClient) commit `dce4735d76cd16abb818cdd96bf458efd4abef47` was an important reference for service UUIDs and message semantics. No source file from that GPL-3.0 project is included here.
 
 Samsung's official Buds3 Pro manual and compatibility notes describe the original controls and the lack of Buds3 Pro support in Samsung's iOS app:
 

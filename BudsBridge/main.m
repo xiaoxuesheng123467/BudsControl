@@ -42,6 +42,16 @@ static NSData *BudsPacket(uint8_t messageID, NSData *payload) {
     return packet;
 }
 
+static BOOL BudsFrameHasValidCRC(NSData *frame) {
+    if (frame.length < 7) { return NO; }
+    const uint8_t *bytes = frame.bytes;
+    NSUInteger checksumInputLength = frame.length - 6;
+    NSData *checksumInput = [frame subdataWithRange:NSMakeRange(3, checksumInputLength)];
+    uint16_t expected = CRC16CCITT(checksumInput);
+    uint16_t actual = bytes[frame.length - 3] | ((uint16_t)bytes[frame.length - 2] << 8);
+    return expected == actual;
+}
+
 static NSString *HexString(NSData *data) {
     const uint8_t *bytes = data.bytes;
     NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithCapacity:data.length];
@@ -92,13 +102,140 @@ static NSString *GeneratePairingSecret(void) {
     return secret;
 }
 
+static BOOL IntegerInRange(id value, NSInteger minimum, NSInteger maximum) {
+    if (![value isKindOfClass:NSNumber.class]) { return NO; }
+    NSNumber *number = value;
+    NSInteger integer = number.integerValue;
+    return number.doubleValue == (double)integer && integer >= minimum && integer <= maximum;
+}
+
+static BOOL ValuesAreBooleans(NSArray *values, NSUInteger count) {
+    if (![values isKindOfClass:NSArray.class] || values.count != count) { return NO; }
+    for (id value in values) {
+        if (!IntegerInRange(value, 0, 1)) { return NO; }
+    }
+    return YES;
+}
+
+static NSData *DataFromNumberArray(NSArray<NSNumber *> *values) {
+    NSMutableData *data = [NSMutableData dataWithCapacity:values.count];
+    for (NSNumber *value in values) {
+        uint8_t byte = (uint8_t)value.unsignedIntegerValue;
+        [data appendBytes:&byte length:1];
+    }
+    return data;
+}
+
+static NSDictionary *BudsCommandDescriptor(NSString *name, NSArray *values, NSString **errorMessage) {
+    if (![name isKindOfClass:NSString.class] || ![values isKindOfClass:NSArray.class]) {
+        if (errorMessage) { *errorMessage = @"缺少 command 或 values"; }
+        return nil;
+    }
+
+    uint8_t messageID = 0;
+    BOOL requiresAcknowledgement = YES;
+    NSData *ackPrefix = nil;
+
+    if ([name isEqualToString:@"noiseControl"] && values.count == 1 && IntegerInRange(values[0], 0, 3)) {
+        messageID = 0x78;
+    } else if ([name isEqualToString:@"equalizer"] && values.count == 1 && IntegerInRange(values[0], 0, 5)) {
+        messageID = 0x86;
+    } else if ([name isEqualToString:@"ambientVolume"] && values.count == 1 && IntegerInRange(values[0], 0, 2)) {
+        messageID = 0x84;
+    } else if ([name isEqualToString:@"ambientCustomization"] && values.count == 4 &&
+               IntegerInRange(values[0], 0, 1) && IntegerInRange(values[1], 0, 2) &&
+               IntegerInRange(values[2], 0, 2) && IntegerInRange(values[3], 0, 4)) {
+        messageID = 0x82;
+    } else if ([name isEqualToString:@"noiseReductionLevel"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x83;
+    } else if ([name isEqualToString:@"voiceDetect"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x7A;
+    } else if ([name isEqualToString:@"voiceDetectTimeout"] && values.count == 1 && IntegerInRange(values[0], 0, 2)) {
+        messageID = 0x7B;
+    } else if ([name isEqualToString:@"noiseControlWithOneEarbud"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x6F;
+    } else if ([name isEqualToString:@"touchLock"] && ValuesAreBooleans(values, 7)) {
+        messageID = 0x90;
+        ackPrefix = [NSData data];
+    } else if ([name isEqualToString:@"touchActions"] && values.count == 2 &&
+               IntegerInRange(values[0], 1, 4) && IntegerInRange(values[1], 1, 4)) {
+        messageID = 0x92;
+    } else if ([name isEqualToString:@"touchNoiseCycle"] && values.count == 2 &&
+               [@[@4, @8, @12] containsObject:values[0]] && [@[@4, @8, @12] containsObject:values[1]]) {
+        messageID = 0x79;
+        ackPrefix = [NSData data];
+    } else if ([name isEqualToString:@"edgeDoubleTapVolume"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x95;
+    } else if ([name isEqualToString:@"stereoBalance"] && values.count == 1 && IntegerInRange(values[0], 0, 32)) {
+        messageID = 0x8F;
+    } else if ([name isEqualToString:@"seamlessConnection"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0xAF;
+        uint8_t semanticValue = [values[0] integerValue] == 0 ? 1 : 0;
+        ackPrefix = [NSData dataWithBytes:&semanticValue length:1];
+    } else if ([name isEqualToString:@"sidetone"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x8B;
+    } else if ([name isEqualToString:@"callPathControl"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x6E;
+        uint8_t semanticValue = [values[0] integerValue] == 0 ? 1 : 0;
+        ackPrefix = [NSData dataWithBytes:&semanticValue length:1];
+    } else if ([name isEqualToString:@"extraClearCall"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x48;
+    } else if ([name isEqualToString:@"extraHighAmbient"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x96;
+    } else if ([name isEqualToString:@"spatialAudio"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x7C;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"gamingMode"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x87;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"autoPauseResume"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x6C;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"fitTest"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0x9D;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"adaptiveVolume"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0xC5;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"sirenDetect"] && ValuesAreBooleans(values, 1)) {
+        messageID = 0xDE;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"findEarbudsStart"] && values.count == 0) {
+        messageID = 0xA6;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"findEarbudsStop"] && values.count == 0) {
+        messageID = 0xA1;
+        requiresAcknowledgement = NO;
+    } else if ([name isEqualToString:@"muteEarbuds"] && ValuesAreBooleans(values, 2)) {
+        messageID = 0xA2;
+    } else {
+        if (errorMessage) { *errorMessage = @"命令不存在或 values 超出允许范围"; }
+        return nil;
+    }
+
+    NSData *payload = DataFromNumberArray(values);
+    if (ackPrefix == nil && requiresAcknowledgement) { ackPrefix = payload; }
+    return @{
+        @"messageID": @(messageID),
+        @"payload": payload,
+        @"ackPrefix": ackPrefix ?: NSNull.null,
+        @"requiresAcknowledgement": @(requiresAcknowledgement)
+    };
+}
+
 @interface BudsTransport : NSObject <IOBluetoothRFCOMMChannelDelegate>
 @property(nonatomic, copy, readonly) NSString *deviceName;
 @property(nonatomic, copy, readonly) NSString *statusMessage;
 @property(nonatomic, assign, readonly, getter=isReady) BOOL ready;
+@property(nonatomic, strong, readonly) NSMutableDictionary *deviceState;
 - (instancetype)initWithPreferredAddress:(NSString *)address;
 - (void)start;
-- (BOOL)sendMessageID:(uint8_t)messageID value:(uint8_t)value error:(NSString **)errorMessage;
+- (BOOL)sendMessageID:(uint8_t)messageID
+              payload:(NSData *)payload
+expectedAcknowledgement:(NSData *)expectedAcknowledgement
+requiresAcknowledgement:(BOOL)requiresAcknowledgement
+         acknowledged:(BOOL *)acknowledged
+                error:(NSString **)errorMessage;
 @end
 
 @interface BudsTransport ()
@@ -120,15 +257,16 @@ static NSString *GeneratePairingSecret(void) {
 @property(nonatomic, assign) NSInteger rightBattery;
 @property(nonatomic, assign) NSInteger caseBattery;
 @property(nonatomic, assign) uint8_t lastAcknowledgedMessageID;
-@property(nonatomic, assign) uint8_t lastAcknowledgedValue;
+@property(nonatomic, strong) NSData *lastAcknowledgedParameters;
 @property(nonatomic, strong) dispatch_queue_t commandQueue;
 @property(nonatomic, strong) dispatch_semaphore_t pendingAcknowledgement;
 @property(nonatomic, assign) uint8_t pendingMessageID;
-@property(nonatomic, assign) uint8_t pendingValue;
+@property(nonatomic, strong) NSData *pendingExpectedAcknowledgement;
 @property(nonatomic, assign) BOOL pendingWasAcknowledged;
 - (BOOL)openServiceRecord:(IOBluetoothSDPServiceRecord *)record;
 - (void)beginSDPQuery;
 - (void)markChannelReady:(IOBluetoothRFCOMMChannel *)channel;
+- (void)requestState;
 - (void)processFrame:(NSData *)frame;
 @end
 
@@ -144,6 +282,7 @@ static NSString *GeneratePairingSecret(void) {
         _leftBattery = -1;
         _rightBattery = -1;
         _caseBattery = -1;
+        _deviceState = [NSMutableDictionary dictionary];
         _commandQueue = dispatch_queue_create("com.qiao.budsbridge.commands", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -313,22 +452,34 @@ static NSString *GeneratePairingSecret(void) {
     self.ready = YES;
     self.statusMessage = @"耳机控制通道已连接";
     if (wasReady) { return; }
+    [self.deviceState removeAllObjects];
+    [self requestState];
+}
+
+- (void)requestState {
+    if (!self.channel.isOpen) { return; }
     NSData *stateRequest = BudsPacket(0x26, [NSData data]);
-    IOReturn stateStatus = [channel writeSync:(void *)stateRequest.bytes length:(uint16_t)stateRequest.length];
+    IOReturn stateStatus = [self.channel writeSync:(void *)stateRequest.bytes length:(uint16_t)stateRequest.length];
     if (stateStatus != kIOReturnSuccess) {
         self.ready = NO;
         self.statusMessage = @"耳机状态请求失败，正在重连";
-        [channel closeChannel];
+        [self.channel closeChannel];
         self.channel = nil;
     }
 }
 
-- (BOOL)sendMessageID:(uint8_t)messageID value:(uint8_t)value error:(NSString **)errorMessage {
+- (BOOL)sendMessageID:(uint8_t)messageID
+              payload:(NSData *)payload
+expectedAcknowledgement:(NSData *)expectedAcknowledgement
+requiresAcknowledgement:(BOOL)requiresAcknowledgement
+         acknowledged:(BOOL *)acknowledgedResult
+                error:(NSString **)errorMessage {
     __block BOOL acknowledged = NO;
+    __block BOOL sent = NO;
     __block NSString *failure = nil;
 
     dispatch_sync(self.commandQueue, ^{
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+        dispatch_semaphore_t semaphore = requiresAcknowledgement ? dispatch_semaphore_create(0) : nil;
         __block BOOL wrotePacket = NO;
 
         dispatch_sync(dispatch_get_main_queue(), ^{
@@ -338,11 +489,10 @@ static NSString *GeneratePairingSecret(void) {
             }
 
             self.pendingMessageID = messageID;
-            self.pendingValue = value;
+            self.pendingExpectedAcknowledgement = expectedAcknowledgement;
             self.pendingWasAcknowledged = NO;
             self.pendingAcknowledgement = semaphore;
 
-            NSData *payload = [NSData dataWithBytes:&value length:1];
             NSData *packet = BudsPacket(messageID, payload);
             IOReturn status = [self.channel writeSync:(void *)packet.bytes length:(uint16_t)packet.length];
             NSLog(@"TX %@ status=0x%08X", HexString(packet), status);
@@ -356,9 +506,14 @@ static NSString *GeneratePairingSecret(void) {
                 return;
             }
             wrotePacket = YES;
+            sent = YES;
         });
 
         if (!wrotePacket) { return; }
+        if (!requiresAcknowledgement) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self requestState]; });
+            return;
+        }
         long waitResult = dispatch_semaphore_wait(semaphore,
             dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
         dispatch_sync(dispatch_get_main_queue(), ^{
@@ -368,11 +523,14 @@ static NSString *GeneratePairingSecret(void) {
             }
             self.pendingWasAcknowledged = NO;
             if (!acknowledged) { failure = @"耳机未确认命令"; }
+            if (acknowledged) { [self requestState]; }
         });
     });
 
-    if (!acknowledged && errorMessage) { *errorMessage = failure ?: @"耳机未确认命令"; }
-    return acknowledged;
+    if (acknowledgedResult) { *acknowledgedResult = acknowledged; }
+    BOOL succeeded = sent && (!requiresAcknowledgement || acknowledged);
+    if (!succeeded && errorMessage) { *errorMessage = failure ?: @"耳机未确认命令"; }
+    return succeeded;
 }
 
 - (void)rfcommChannelData:(IOBluetoothRFCOMMChannel *)rfcommChannel
@@ -399,20 +557,35 @@ static NSString *GeneratePairingSecret(void) {
         NSData *frame = [self.receiveBuffer subdataWithRange:NSMakeRange(0, frameLength)];
         [self.receiveBuffer replaceBytesInRange:NSMakeRange(0, frameLength) withBytes:NULL length:0];
         const uint8_t *frameBytes = frame.bytes;
-        if (frameBytes[frameLength - 1] == 0xDD) { [self processFrame:frame]; }
+        if (frameBytes[frameLength - 1] == 0xDD && BudsFrameHasValidCRC(frame)) {
+            [self processFrame:frame];
+        } else {
+            NSLog(@"Dropped invalid RFCOMM frame: %@", HexString(frame));
+        }
     }
 }
 
 - (void)processFrame:(NSData *)frame {
     const uint8_t *bytes = frame.bytes;
     uint8_t messageID = bytes[3];
-    if (messageID == 0x42 && frame.length >= 7) {
+    NSUInteger payloadLength = frame.length >= 7 ? frame.length - 7 : 0;
+    if (messageID == 0x42 && payloadLength >= 1) {
         self.lastAcknowledgedMessageID = bytes[4];
-        self.lastAcknowledgedValue = frame.length > 7 ? bytes[5] : 0;
-        NSLog(@"ACK command=0x%02X value=0x%02X", self.lastAcknowledgedMessageID, self.lastAcknowledgedValue);
+        NSUInteger parameterLength = payloadLength - 1;
+        self.lastAcknowledgedParameters = parameterLength > 0
+            ? [frame subdataWithRange:NSMakeRange(5, parameterLength)]
+            : [NSData data];
+        NSLog(@"ACK command=0x%02X parameters=%@", self.lastAcknowledgedMessageID,
+              HexString(self.lastAcknowledgedParameters));
+        BOOL parametersMatch = self.pendingExpectedAcknowledgement == nil ||
+            self.pendingExpectedAcknowledgement.length == 0 ||
+            (self.lastAcknowledgedParameters.length >= self.pendingExpectedAcknowledgement.length &&
+             [[self.lastAcknowledgedParameters subdataWithRange:
+                 NSMakeRange(0, self.pendingExpectedAcknowledgement.length)]
+                 isEqualToData:self.pendingExpectedAcknowledgement]);
         if (self.pendingAcknowledgement != nil &&
             self.pendingMessageID == self.lastAcknowledgedMessageID &&
-            self.pendingValue == self.lastAcknowledgedValue) {
+            parametersMatch) {
             self.pendingWasAcknowledged = YES;
             dispatch_semaphore_signal(self.pendingAcknowledgement);
         }
@@ -425,12 +598,68 @@ static NSString *GeneratePairingSecret(void) {
         if (bytes[10] <= 100) { self.caseBattery = bytes[10]; }
         NSLog(@"Battery left=%ld right=%ld case=%ld",
               (long)self.leftBattery, (long)self.rightBattery, (long)self.caseBattery);
-    } else if (messageID == 0x61 && frame.length >= 15) {
+    } else if (messageID == 0x61 && payloadLength >= 8) {
+        const uint8_t *payload = bytes + 4;
         self.leftBattery = bytes[6] <= 100 ? bytes[6] : -1;
         self.rightBattery = bytes[7] <= 100 ? bytes[7] : -1;
         if (bytes[11] > 0 && bytes[11] <= 100) { self.caseBattery = bytes[11]; }
+
+        self.deviceState[@"hasExtendedState"] = @YES;
+        self.deviceState[@"revision"] = @(payload[0]);
+        if (payloadLength > 9 && payload[9] <= 5) { self.deviceState[@"equalizer"] = @(payload[9]); }
+        if (payloadLength > 10) {
+            uint8_t touchState = payload[10];
+            self.deviceState[@"touchLocked"] = @((touchState & 0x80) == 0);
+            self.deviceState[@"singleTapEnabled"] = @((touchState & 0x08) != 0);
+            self.deviceState[@"doubleTapEnabled"] = @((touchState & 0x04) != 0);
+            self.deviceState[@"tripleTapEnabled"] = @((touchState & 0x02) != 0);
+            self.deviceState[@"touchAndHoldEnabled"] = @((touchState & 0x01) != 0);
+            self.deviceState[@"doubleTapCallEnabled"] = @((touchState & 0x10) != 0);
+            self.deviceState[@"touchAndHoldCallEnabled"] = @((touchState & 0x20) != 0);
+        }
+        if (payloadLength > 11) {
+            self.deviceState[@"leftTouchAction"] = @((payload[11] & 0xF0) >> 4);
+            self.deviceState[@"rightTouchAction"] = @(payload[11] & 0x0F);
+        }
+        if (payloadLength > 12 && payload[12] <= 3) { self.deviceState[@"noiseMode"] = @(payload[12]); }
+        if (payloadLength > 19) { self.deviceState[@"seamlessConnection"] = @(payload[19] == 0); }
+        if (payloadLength > 21) { self.deviceState[@"touchNoiseCycleRaw"] = @(payload[21]); }
+        if (payloadLength > 23 && payload[23] <= 3) { self.deviceState[@"ambientVolume"] = @(payload[23]); }
+        if (payloadLength > 24) { self.deviceState[@"noiseReductionHigh"] = @(payload[24] == 1); }
+        if (payloadLength > 25 && payload[25] <= 32) { self.deviceState[@"stereoBalance"] = @(payload[25]); }
+        if (payloadLength > 26) { self.deviceState[@"voiceDetectEnabled"] = @(payload[26] == 1); }
+        if (payloadLength > 27 && payload[27] <= 2) { self.deviceState[@"voiceDetectTimeout"] = @(payload[27]); }
+        if (payloadLength > 28) { self.deviceState[@"noiseControlWithOneEarbud"] = @(payload[28] == 1); }
+        if (payloadLength > 29) { self.deviceState[@"ambientCustomizationEnabled"] = @(payload[29] == 1); }
+        if (payloadLength > 30) {
+            self.deviceState[@"ambientVolumeLeft"] = @((payload[30] & 0xF0) >> 4);
+            self.deviceState[@"ambientVolumeRight"] = @(payload[30] & 0x0F);
+        }
+        if (payloadLength > 31 && payload[31] <= 4) { self.deviceState[@"ambientTone"] = @(payload[31]); }
+        if (payloadLength > 32) { self.deviceState[@"edgeDoubleTapVolume"] = @(payload[32] == 1); }
+        if (payloadLength > 33) { self.deviceState[@"sidetoneEnabled"] = @(payload[33] == 1); }
+        if (payloadLength > 34) { self.deviceState[@"callPathControlEnabled"] = @(payload[34] == 0); }
+        if (payloadLength > 35) { self.deviceState[@"spatialAudioEnabled"] = @(payload[35] == 1); }
+        if (payloadLength > 45) { self.deviceState[@"spatialHeadTrackingEnabled"] = @(payload[45] == 1); }
+        if (payloadLength > 47) { self.deviceState[@"extraClearCallEnabled"] = @(payload[47] == 1); }
+        if (payloadLength > 48) { self.deviceState[@"extraHighAmbientEnabled"] = @(payload[48] == 1); }
+        if (payloadLength > 49) { self.deviceState[@"autoPauseResumeEnabled"] = @(payload[49] == 1); }
+        if (payloadLength > 50) { self.deviceState[@"hotCommandEnabled"] = @(payload[50] == 1); }
+        if (payloadLength > 53) { self.deviceState[@"adaptiveVolumeEnabled"] = @(payload[53] == 1); }
+        if (payloadLength > 54) { self.deviceState[@"lightingControl"] = @(payload[54]); }
+        if (payloadLength > 56) { self.deviceState[@"sirenDetectEnabled"] = @(payload[56] == 1); }
+        if (payloadLength > 57) { self.deviceState[@"adaptSoundEnabled"] = @(payload[57] == 1); }
+        self.deviceState[@"stateUpdatedAt"] = @([NSDate date].timeIntervalSince1970);
         NSLog(@"Battery left=%ld right=%ld case=%ld",
               (long)self.leftBattery, (long)self.rightBattery, (long)self.caseBattery);
+    } else if (messageID == 0x9E && payloadLength >= 2) {
+        self.deviceState[@"fitTestLeft"] = @(bytes[4]);
+        self.deviceState[@"fitTestRight"] = @(bytes[5]);
+        self.deviceState[@"fitTestActive"] = @NO;
+        uint8_t stop = 0;
+        NSData *packet = BudsPacket(0x9D, [NSData dataWithBytes:&stop length:1]);
+        IOReturn status = [self.channel writeSync:(void *)packet.bytes length:(uint16_t)packet.length];
+        NSLog(@"Fit test complete; stop TX status=0x%08X", status);
     }
 }
 
@@ -455,6 +684,7 @@ static NSString *GeneratePairingSecret(void) {
     }
     self.channel = nil;
     self.ready = NO;
+    [self.deviceState removeAllObjects];
     self.statusMessage = @"耳机已断开，正在等待重连";
     NSLog(@"RFCOMM channel closed");
 }
@@ -552,9 +782,9 @@ static NSString *GeneratePairingSecret(void) {
     self.failedAuthAttempts = 0;
 
     if ([method isEqualToString:@"GET"] && [path isEqualToString:@"/v1/status"]) {
-        __block NSDictionary *payload;
+        __block NSMutableDictionary *payload;
         dispatch_sync(dispatch_get_main_queue(), ^{
-            payload = @{
+            payload = [@{
                 @"ready": @(self.transport.isReady),
                 @"serviceName": @"BudsBridge",
                 @"deviceName": self.transport.deviceName ?: @"Galaxy Buds3 Pro",
@@ -562,39 +792,69 @@ static NSString *GeneratePairingSecret(void) {
                 @"leftBattery": self.transport.leftBattery >= 0 ? @(self.transport.leftBattery) : NSNull.null,
                 @"rightBattery": self.transport.rightBattery >= 0 ? @(self.transport.rightBattery) : NSNull.null,
                 @"caseBattery": self.transport.caseBattery >= 0 ? @(self.transport.caseBattery) : NSNull.null
-            };
+            } mutableCopy];
+            [payload addEntriesFromDictionary:self.transport.deviceState];
         });
         *status = 200;
         return payload;
     }
 
     if (![method isEqualToString:@"POST"] ||
-        (!([path isEqualToString:@"/v1/noise"] || [path isEqualToString:@"/v1/equalizer"]))) {
+        !([path isEqualToString:@"/v1/noise"] || [path isEqualToString:@"/v1/equalizer"] ||
+          [path isEqualToString:@"/v1/command"])) {
         *status = 404;
         return @{ @"sent": @NO, @"message": @"未知接口" };
     }
 
     NSError *jsonError = nil;
     NSDictionary *json = body.length > 0 ? [NSJSONSerialization JSONObjectWithData:body options:0 error:&jsonError] : nil;
-    NSNumber *number = [json isKindOfClass:NSDictionary.class] ? json[@"value"] : nil;
-    if (![number isKindOfClass:NSNumber.class]) {
+    if (![json isKindOfClass:NSDictionary.class] || jsonError != nil) {
         *status = 400;
-        return @{ @"sent": @NO, @"message": @"缺少整数 value" };
+        return @{ @"sent": @NO, @"message": @"请求体必须是 JSON 对象" };
     }
 
-    NSInteger value = number.integerValue;
-    BOOL isNoise = [path isEqualToString:@"/v1/noise"];
-    if ((isNoise && (value < 0 || value > 2)) || (!isNoise && (value < 0 || value > 5))) {
-        *status = 400;
-        return @{ @"sent": @NO, @"message": @"value 超出支持范围" };
+    NSString *commandName = json[@"command"];
+    NSArray *values = json[@"values"];
+    if ([path isEqualToString:@"/v1/noise"] || [path isEqualToString:@"/v1/equalizer"]) {
+        NSNumber *value = json[@"value"];
+        commandName = [path isEqualToString:@"/v1/noise"] ? @"noiseControl" : @"equalizer";
+        values = [value isKindOfClass:NSNumber.class] ? @[value] : nil;
     }
 
+    NSString *validationError = nil;
+    NSDictionary *descriptor = BudsCommandDescriptor(commandName, values, &validationError);
+    if (descriptor == nil) {
+        *status = 400;
+        return @{ @"sent": @NO, @"message": validationError ?: @"命令无效" };
+    }
+
+    NSData *expectedAcknowledgement = descriptor[@"ackPrefix"] == NSNull.null
+        ? nil : descriptor[@"ackPrefix"];
+    BOOL requiresAcknowledgement = [descriptor[@"requiresAcknowledgement"] boolValue];
+    BOOL acknowledged = NO;
     NSString *errorMessage = nil;
-    BOOL sent = [self.transport sendMessageID:(isNoise ? 0x78 : 0x86)
-                                        value:(uint8_t)value
+    BOOL sent = [self.transport sendMessageID:[descriptor[@"messageID"] unsignedCharValue]
+                                      payload:descriptor[@"payload"]
+                      expectedAcknowledgement:expectedAcknowledgement
+                     requiresAcknowledgement:requiresAcknowledgement
+                                 acknowledged:&acknowledged
                                         error:&errorMessage];
+    if (sent && [commandName isEqualToString:@"fitTest"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BOOL active = [values.firstObject boolValue];
+            self.transport.deviceState[@"fitTestActive"] = @(active);
+            if (active) {
+                [self.transport.deviceState removeObjectForKey:@"fitTestLeft"];
+                [self.transport.deviceState removeObjectForKey:@"fitTestRight"];
+            }
+        });
+    }
     *status = sent ? 200 : 503;
-    return @{ @"sent": @(sent), @"message": sent ? @"耳机已确认命令" : (errorMessage ?: @"耳机未连接") };
+    NSString *confirmation = acknowledged ? @"acknowledged" : (sent ? @"written" : @"failed");
+    NSString *message = acknowledged ? @"耳机已确认命令" :
+        (sent ? @"命令已写入，等待状态包确认" : (errorMessage ?: @"耳机未连接"));
+    return @{ @"sent": @(sent), @"acknowledged": @(acknowledged),
+              @"confirmation": confirmation, @"message": message };
 }
 
 @end
@@ -774,6 +1034,54 @@ static NSString *ArgumentValue(NSArray<NSString *> *arguments, NSString *flag) {
     return arguments[index + 1];
 }
 
+static int RunProtocolSelfTest(void) {
+    NSArray<NSDictionary *> *vectors = @[
+        @{ @"name": @"noiseControl", @"values": @[@3], @"messageID": @0x78,
+           @"packet": @"FD 04 00 78 03 93 B1 DD" },
+        @{ @"name": @"ambientVolume", @"values": @[@2], @"messageID": @0x84,
+           @"packet": @"FD 04 00 84 02 1E F7 DD" },
+        @{ @"name": @"ambientCustomization", @"values": @[@1, @2, @1, @3], @"messageID": @0x82,
+           @"packet": @"FD 07 00 82 01 02 01 03 D5 7D DD" },
+        @{ @"name": @"touchLock", @"values": @[@1, @1, @1, @1, @1, @1, @1], @"messageID": @0x90,
+           @"packet": @"FD 0A 00 90 01 01 01 01 01 01 01 31 F5 DD" },
+        @{ @"name": @"touchNoiseCycle", @"values": @[@8, @12], @"messageID": @0x79,
+           @"packet": @"FD 05 00 79 08 0C BC 0E DD" },
+        @{ @"name": @"seamlessConnection", @"values": @[@0], @"messageID": @0xAF,
+           @"packet": @"FD 04 00 AF 00 40 0D DD" }
+    ];
+
+    for (NSDictionary *vector in vectors) {
+        NSString *error = nil;
+        NSDictionary *descriptor = BudsCommandDescriptor(vector[@"name"], vector[@"values"], &error);
+        if (descriptor == nil || ![descriptor[@"messageID"] isEqual:vector[@"messageID"]]) {
+            NSLog(@"SELF-TEST FAIL %@: %@", vector[@"name"], error ?: @"message ID mismatch");
+            return 10;
+        }
+        NSData *packet = BudsPacket([descriptor[@"messageID"] unsignedCharValue], descriptor[@"payload"]);
+        if (![HexString(packet) isEqualToString:vector[@"packet"]]) {
+            NSLog(@"SELF-TEST FAIL %@: %@", vector[@"name"], HexString(packet));
+            return 11;
+        }
+    }
+
+    NSArray<NSDictionary *> *invalid = @[
+        @{ @"name": @"noiseControl", @"values": @[@4] },
+        @{ @"name": @"touchActions", @"values": @[@0, @2] },
+        @{ @"name": @"ambientCustomization", @"values": @[@1, @3, @1, @2] },
+        @{ @"name": @"rawMessage", @"values": @[@120, @1] }
+    ];
+    for (NSDictionary *request in invalid) {
+        if (BudsCommandDescriptor(request[@"name"], request[@"values"], nil) != nil) {
+            NSLog(@"SELF-TEST FAIL: invalid command accepted %@", request);
+            return 12;
+        }
+    }
+
+    NSLog(@"Protocol self-test passed: %lu vectors and %lu rejection cases",
+          (unsigned long)vectors.count, (unsigned long)invalid.count);
+    return 0;
+}
+
 static int RunTLSProbe(NSString *host, NSString *port, NSString *pairingCode) {
     nw_endpoint_t endpoint = nw_endpoint_create_host(host.UTF8String, port.UTF8String);
     nw_connection_t connection = nw_connection_create(endpoint, BridgeSecureParameters(pairingCode));
@@ -837,6 +1145,9 @@ static int RunTLSProbe(NSString *host, NSString *port, NSString *pairingCode) {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
+        if ([arguments containsObject:@"--protocol-self-test"]) {
+            return RunProtocolSelfTest();
+        }
         NSString *probePort = ArgumentValue(arguments, @"--probe-port");
         NSString *probeCode = ArgumentValue(arguments, @"--pairing-code");
         if (probePort.length > 0 && probeCode.length > 0) {
