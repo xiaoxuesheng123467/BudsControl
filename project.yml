@@ -1,0 +1,56 @@
+name: BudsControl
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "27.0"
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  BudsBridge:
+    type: tool
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: BudsBridge
+    dependencies:
+      - sdk: IOBluetooth.framework
+      - sdk: Network.framework
+      - sdk: Security.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qiao.budsbridge
+        PRODUCT_NAME: BudsBridge
+        CLANG_ENABLE_OBJC_ARC: YES
+  BudsControl:
+    type: application
+    platform: iOS
+    sources:
+      - path: BudsControl/Sources
+      - path: BudsControl/Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qiao.budscontrol
+        PRODUCT_NAME: BudsControl
+        SWIFT_OBJC_BRIDGING_HEADER: BudsControl/Sources/BudsControl-Bridging-Header.h
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: BudsControl/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  BudsControlTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: BudsControlTests
+    dependencies:
+      - target: BudsControl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qiao.budscontrol.tests
+        GENERATE_INFOPLIST_FILE: YES
