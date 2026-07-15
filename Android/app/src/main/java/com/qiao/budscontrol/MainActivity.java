@@ -248,7 +248,7 @@ public final class MainActivity extends Activity implements BudsRepository.Liste
             noiseButtons.addView(button, weightedWithMargin(3));
         }
         noise.addView(noiseButtons);
-        noise.addView(verificationText("降噪 / 环境声 / 关闭已真机确认；自适应待验证"));
+        noise.addView(verificationText("协议已在 SM-R630 的 iOS / Mac 链路确认；Android 直连待验证"));
         content.addView(noise);
 
         LinearLayout equalizer = section("均衡器");
@@ -259,7 +259,7 @@ public final class MainActivity extends Activity implements BudsRepository.Liste
                 repository.canControl(),
                 repository::setEqualizer
         ));
-        equalizer.addView(verificationText("六组预设已通过 SM-R630 真机确认"));
+        equalizer.addView(verificationText("六组预设已在 iOS / Mac 链路确认；Android 直连待验证"));
         content.addView(equalizer);
 
         LinearLayout pages = section("更多设置");
