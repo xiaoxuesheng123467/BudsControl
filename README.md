@@ -1,10 +1,19 @@
 # BudsControl
 
-BudsControl is an unofficial iPhone controller for Galaxy Buds3 Pro. It reproduces the useful parts of Samsung's One UI settings screen and sends real control packets through a small Mac bridge.
+BudsControl is an unofficial iOS and Android controller for Galaxy Buds3 Pro, built for people who want the useful Galaxy Wearable controls without owning a Samsung phone. It reproduces the useful parts of Samsung's One UI settings screen and keeps the last successfully applied settings locally.
 
 ![BudsControl running on an iPhone](Screenshots/buds-control-iphone.png)
 
-The original control path has been tested on a physical SM-R630. The earbuds acknowledged noise-control and equalizer commands, and the app read the left, right, and case battery levels. Version 0.2.0 adds protocol-mapped controls that still need a second physical-earbud validation pass. This is a personal Xcode build, not an App Store release.
+The original iOS control path has been tested on a physical SM-R630. The earbuds acknowledged noise-control and equalizer commands, and the app read the left, right, and case battery levels. iOS 0.2.0 adds protocol-mapped controls that still need a second physical-earbud validation pass. Android 0.1.0 implements the same controls over a direct Bluetooth Classic connection and currently remains a hardware-validation preview.
+
+## Platforms
+
+| Platform | Control path | Release status |
+| --- | --- | --- |
+| iOS 18+ | iPhone -> encrypted local bridge -> Mac RFCOMM -> Buds3 Pro | Core controls hardware verified; extended 0.2.0 controls pending |
+| Android 8+ | Android phone -> Bluetooth Classic RFCOMM -> Buds3 Pro | 0.1.0 preview; simulator and protocol tests passed, physical earbuds pending |
+
+The Android client does not need a Samsung phone, Samsung account, Mac bridge, cloud service, or location scan. It connects only to an already paired Galaxy Buds device after the user grants the Nearby devices permission.
 
 ## Working features
 
@@ -39,7 +48,15 @@ BudsBridge handles the RFCOMM connection on macOS. The iPhone discovers the brid
 iPhone app == TLS-PSK over LAN ==> BudsBridge == RFCOMM channel 27 ==> Buds3 Pro
 ```
 
+Android exposes the Bluetooth Classic RFCOMM API to normal applications, so its connection path is direct:
+
+```text
+Android app == Bluetooth Classic RFCOMM ==> Buds3 Pro
+```
+
 ## Install
+
+### iOS
 
 Requirements:
 
@@ -59,6 +76,12 @@ The project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 xcodegen generate
 ```
 
+### Android
+
+Download the Android preview APK from the [Android 0.1.0 GitHub release](https://github.com/xiaoxuesheng123467/BudsControl/releases/tag/android-v0.1.0), or build it from `Android/` with Android Studio. Pair the Buds3 Pro in Android system Bluetooth settings before opening BudsControl, grant the Nearby devices permission, then select the paired earbuds in the app.
+
+The downloadable APK is a preview build signed for direct testing. Android may require the preview build to be uninstalled before a future store-signed build can be installed. See [Android/README.md](Android/README.md) for build, permission, and validation details.
+
 ## Validation
 
 The packet verifier checks the CRC and byte layout for the hardware-verified commands and prints every newly mapped command packet:
@@ -73,6 +96,13 @@ Build both targets without signing:
 ```sh
 xcodebuild -project BudsControl.xcodeproj -scheme BudsBridge build CODE_SIGNING_ALLOWED=NO
 xcodebuild -project BudsControl.xcodeproj -scheme BudsControl -sdk iphoneos build CODE_SIGNING_ALLOWED=NO
+```
+
+Build and test Android:
+
+```sh
+cd Android
+./gradlew clean testDebugUnitTest assembleDebug lintDebug
 ```
 
 The bridge also contains a local TLS probe for development builds:
@@ -93,6 +123,8 @@ Open **验证中心** in the iPhone app. Offline demo mode exercises the complet
 
 The app remembers settings only after a command succeeds. On the next launch it shows those saved values immediately, then replaces individual fields when BudsBridge receives a newer extended-status packet from the earbuds. It does not blindly replay every setting on reconnect.
 
+Android has the same **验证中心** flow. Its offline mode exercises all pages and exports the exact RFCOMM packet log. On a real phone, a setting is saved only after the command is acknowledged or successfully written; a later earbud status packet corrects the saved value. Android 0.1.0 has not yet been connected to a physical Buds3 Pro, so its direct transport and all command mappings remain explicitly pending hardware validation.
+
 ## Protocol notes
 
 Samsung messages use the frame below. CRC is CRC-16/CCITT with polynomial `0x1021` and initial value `0`, calculated over the message ID and payload.
@@ -112,7 +144,7 @@ Samsung's official Buds3 Pro manual and compatibility notes describe the origina
 
 BudsBridge accepts TLS-PSK connections only. It generates a 128-bit random pairing secret for each run, derives a 256-bit key with SHA-256, and restricts the TLS session to an authenticated PSK cipher. The HTTP layer checks the same secret and limits request sizes and timeouts.
 
-The app has no analytics or cloud backend. See [PRIVACY.md](PRIVACY.md) for the optional Bluetooth diagnostic log.
+Neither app has analytics or a cloud backend. See [PRIVACY.md](PRIVACY.md) for locally stored settings, permissions, and optional diagnostic logs.
 
 ## License and trademark
 

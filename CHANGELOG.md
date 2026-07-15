@@ -1,5 +1,22 @@
 # Changelog
 
+## Android 0.1.0 - 2026-07-16
+
+### Added
+
+- Native Android 8+ client with direct Bluetooth Classic RFCOMM connection to already paired Galaxy Buds3 Pro.
+- Dashboard for connection, left/right/case battery, ANC, ambient, adaptive noise control, and six EQ presets.
+- Secondary pages for ambient customization, voice detection, touch controls, long-pinch actions, noise cycles, stereo balance, calls, and connection options.
+- Fit test, Find My Earbuds with per-side mute, experimental-command gate, and validation center.
+- Local last-setting memory, last-device auto-connect, offline demonstration mode, packet history, and exportable validation report.
+- Android 12+ Nearby devices permission flow without location permission or discovery scanning.
+- CRC/frame parser, serial command queue, acknowledgement timeout, extended-state decoding, and unit tests.
+
+### Still Pending Hardware Validation
+
+- The Android RFCOMM connection and every real-earbud command. Protocol/unit tests, lint, builds, and the full offline simulator flow pass, but no physical Buds3 Pro was available for this release.
+- The downloadable APK is a direct-install preview build rather than a Play Store release.
+
 ## 0.2.0 - 2026-07-16
 
 ### Added

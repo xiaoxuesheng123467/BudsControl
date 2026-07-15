@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BudsControl</string>
+    <string name="product_tagline">没有三星手机，也能扩展 Galaxy Buds 功能</string>
+    <string name="bluetooth_permission_reason">BudsControl 只使用附近设备权限连接你已经配对的 Galaxy Buds，不扫描位置，也不上传设备信息。</string>
+</resources>
+

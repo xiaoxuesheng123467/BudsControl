@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BudsControl" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:navigationBarColor">@color/buds_background</item>
+        <item name="android:statusBarColor">@color/buds_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">@color/buds_green</item>
+        <item name="android:windowBackground">@color/buds_background</item>
+    </style>
+</resources>
+
