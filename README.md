@@ -1,10 +1,10 @@
 # BudsControl
 
-BudsControl is an unofficial iOS and Android controller for Galaxy Buds3 Pro, built for people who want the useful Galaxy Wearable controls without owning a Samsung phone. It reproduces the useful parts of Samsung's One UI settings screen and keeps the last successfully applied settings locally.
+BudsControl is an unofficial iOS, Android, and Windows controller for Galaxy Buds3 Pro, built for people who want the useful Galaxy Wearable controls without owning a Samsung phone. It reproduces the useful parts of Samsung's One UI settings screen and keeps the last successfully applied settings locally.
 
 ![BudsControl running on an iPhone](Screenshots/buds-control-iphone.png)
 
-The original iOS control path has been tested on a physical SM-R630. The earbuds acknowledged noise-control and equalizer commands, and the app read the left, right, and case battery levels. iOS 0.2.0 adds protocol-mapped controls that still need a second physical-earbud validation pass. Android 0.1.0 implements the same controls over a direct Bluetooth Classic connection and currently remains a hardware-validation preview.
+The original iOS control path has been tested on a physical SM-R630. The earbuds acknowledged noise-control and equalizer commands, and the app read the left, right, and case battery levels. iOS 0.2.0 adds protocol-mapped controls that still need a second physical-earbud validation pass. Android 0.1.0 and Windows 0.1.0 implement the same controls over direct Bluetooth Classic connections and currently remain hardware-validation previews.
 
 ## Platforms
 
@@ -12,8 +12,9 @@ The original iOS control path has been tested on a physical SM-R630. The earbuds
 | --- | --- | --- |
 | iOS 18+ | iPhone -> encrypted local bridge -> Mac RFCOMM -> Buds3 Pro | Core controls hardware verified; extended 0.2.0 controls pending |
 | Android 8+ | Android phone -> Bluetooth Classic RFCOMM -> Buds3 Pro | 0.1.0 preview; simulator and protocol tests passed, physical earbuds pending |
+| Windows 10 2004+ | Windows PC -> Bluetooth Classic RFCOMM -> Buds3 Pro | 0.1.0 preview; build and 19 protocol/transport tests passed, Windows hardware pending |
 
-The Android client does not need a Samsung phone, Samsung account, Mac bridge, cloud service, or location scan. It connects only to an already paired Galaxy Buds device after the user grants the Nearby devices permission.
+The Android and Windows clients do not need a Samsung phone, Samsung account, Mac bridge, or cloud service. Both connect only to an already paired Galaxy Buds device; neither performs a location-based discovery scan.
 
 ## Working features
 
@@ -54,6 +55,12 @@ Android exposes the Bluetooth Classic RFCOMM API to normal applications, so its 
 Android app == Bluetooth Classic RFCOMM ==> Buds3 Pro
 ```
 
+Windows desktop applications can also open the RFCOMM service of an already paired device:
+
+```text
+Windows app == Bluetooth Classic RFCOMM ==> Buds3 Pro
+```
+
 ## Install
 
 ### iOS
@@ -82,6 +89,12 @@ Download the Android preview APK from the [Android 0.1.0 GitHub release](https:/
 
 The downloadable APK is a preview build signed for direct testing. Android may require the preview build to be uninstalled before a future store-signed build can be installed. See [Android/README.md](Android/README.md) for build, permission, and validation details.
 
+### Windows
+
+Download the Windows preview ZIP from the [Windows 0.1.0 GitHub release](https://github.com/xiaoxuesheng123467/BudsControl/releases/tag/windows-v0.1.0). It requires 64-bit Windows 10 version 2004 or newer and the .NET 9 Desktop Runtime. Pair the Buds3 Pro in Windows Bluetooth settings first, extract the complete ZIP, then run `BudsControl.exe` and select the paired earbuds.
+
+The Windows client is a framework-dependent, unsigned WPF preview. Its protocol, framing, ACK, timeout, and settings helpers pass 19 automated tests, but the WPF runtime and RFCOMM path still require a Windows PC with a physical SM-R630. See [Windows/README.md](Windows/README.md) for build and validation details.
+
 ## Validation
 
 The packet verifier checks the CRC and byte layout for the hardware-verified commands and prints every newly mapped command packet:
@@ -105,6 +118,14 @@ cd Android
 ./gradlew clean testDebugUnitTest assembleDebug lintDebug
 ```
 
+Build and test Windows with .NET 9:
+
+```powershell
+dotnet restore Windows/BudsControl.slnx
+dotnet test Windows/BudsControl.Tests/BudsControl.Tests.csproj -c Release
+dotnet build Windows/BudsControl.slnx -c Release
+```
+
 The bridge also contains a local TLS probe for development builds:
 
 ```sh
@@ -124,6 +145,8 @@ Open **验证中心** in the iPhone app. Offline demo mode exercises the complet
 The app remembers settings only after a command succeeds. On the next launch it shows those saved values immediately, then replaces individual fields when BudsBridge receives a newer extended-status packet from the earbuds. It does not blindly replay every setting on reconnect.
 
 Android has the same **验证中心** flow. Its offline mode exercises all pages and exports the exact RFCOMM packet log. On a real phone, a setting is saved only after the command is acknowledged or successfully written; a later earbud status packet corrects the saved value. Android 0.1.0 has not yet been connected to a physical Buds3 Pro, so its direct transport and all command mappings remain explicitly pending hardware validation.
+
+Windows uses the same validation order and result labels. The Windows build and 19 automated protocol/transport tests pass, but WPF startup, the Bluetooth adapter path, and every real-earbud command remain explicitly pending until tested on Windows hardware.
 
 ## Protocol notes
 

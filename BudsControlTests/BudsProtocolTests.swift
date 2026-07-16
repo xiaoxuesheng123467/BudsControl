@@ -148,4 +148,30 @@ final class BudsProtocolTests: XCTestCase {
         XCTAssertEqual(Set(names).count, names.count)
         XCTAssertEqual(names.count, 27)
     }
+
+    func testBridgeHTTPWaitsForTheDeclaredBodyThenParsesWithoutEOF() throws {
+        let body = Data(#"{"ready":true}"#.utf8)
+        let header = Data(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\n\r\n".utf8
+        )
+        let response = header + body
+
+        XCTAssertNil(try BridgeHTTP.completeResponseBody(from: response.dropLast()))
+        XCTAssertEqual(try BridgeHTTP.completeResponseBody(from: response), body)
+    }
+
+    func testBridgeHTTPRejectsCompletedErrorResponse() {
+        let body = Data(#"{"message":"配对密钥不正确"}"#.utf8)
+        let response = Data(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: \(body.count)\r\n\r\n".utf8
+        ) + body
+
+        XCTAssertThrowsError(try BridgeHTTP.completeResponseBody(from: response)) { error in
+            guard case BridgeHTTP.RequestError.server(let status, let message) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertEqual(status, 401)
+            XCTAssertEqual(message, "配对密钥不正确")
+        }
+    }
 }

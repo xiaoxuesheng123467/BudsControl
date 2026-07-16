@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="BudsControl.Core/BudsControl.Core.csproj" />
+  <Project Path="BudsControl.Windows/BudsControl.Windows.csproj" />
+  <Project Path="BudsControl.Tests/BudsControl.Tests.csproj" />
+</Solution>

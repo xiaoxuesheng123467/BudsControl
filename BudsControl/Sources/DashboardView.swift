@@ -1,7 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct DashboardView: View {
     @EnvironmentObject private var bridge: BudsBridgeClient
+    @Environment(\.openURL) private var openURL
     @State private var showsDiagnostics = false
 
     private let pageBackground = Color(red: 0.956, green: 0.969, blue: 0.976)
@@ -208,7 +210,7 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(bridge.phase.title)
                         .font(.subheadline.weight(.semibold))
-                    Text(bridge.phase.isReady ? "RFCOMM 经局域网桥接" : "请在同一网络的 Mac 上运行 BudsBridge")
+                    Text(connectionSubtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -217,12 +219,14 @@ struct DashboardView: View {
             .padding(16)
             .background(.white, in: RoundedRectangle(cornerRadius: 8))
 
-            if case .pairing = bridge.phase {
+            if bridge.shouldShowPairingControls {
                 HStack(spacing: 10) {
                     TextField("32 位配对密钥", text: $bridge.pairingCode)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                         .textContentType(.oneTimeCode)
+                        .submitLabel(.go)
+                        .onSubmit(bridge.submitPairingCode)
                         .multilineTextAlignment(.center)
                         .font(.body.monospacedDigit().weight(.semibold))
                         .frame(maxWidth: .infinity)
@@ -239,6 +243,40 @@ struct DashboardView: View {
                     .disabled(bridge.pairingCode.count != 32)
                     .accessibilityLabel("提交配对密钥")
                 }
+            }
+
+            if let issue = bridge.connectionIssue {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("连接排查", systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline.weight(.semibold))
+                    Text(issue.guidance)
+                        .font(.caption)
+                    Text("技术详情：\(issue.technicalDetail)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    HStack(spacing: 10) {
+                        if issue.offersSettingsShortcut,
+                           let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                            Button {
+                                openURL(settingsURL)
+                            } label: {
+                                Label("打开系统设置", systemImage: "gearshape")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Button {
+                            bridge.restartDiscovery()
+                        } label: {
+                            Label("重新发现", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.orange)
+                .padding(14)
+                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
 
             if let message = bridge.lastCommandMessage {
@@ -358,6 +396,16 @@ struct DashboardView: View {
         case .pairing: "key.fill"
         case .unavailable: "exclamationmark.triangle.fill"
         }
+    }
+
+    private var connectionSubtitle: String {
+        if bridge.phase.isReady {
+            return "RFCOMM 经局域网桥接"
+        }
+        if bridge.hasDiscoveredBridge {
+            return "已发现 Mac 桥接，等待完成认证或连接"
+        }
+        return "请在同一网络的 Mac 上运行 BudsBridge"
     }
 
     private var statusColor: Color {

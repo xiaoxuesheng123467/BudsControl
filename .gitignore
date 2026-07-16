@@ -13,3 +13,6 @@ xcuserdata/
 *.ipa
 *.dSYM.zip
 *.xcarchive
+Windows/**/bin/
+Windows/**/obj/
+Windows/.vs/

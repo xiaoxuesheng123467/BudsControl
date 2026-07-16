@@ -44,6 +44,12 @@ enum BridgePhase: Equatable {
     }
 }
 
+struct BridgeConnectionIssue: Equatable {
+    let guidance: String
+    let technicalDetail: String
+    let offersSettingsShortcut: Bool
+}
+
 private struct BridgeStatusPayload: Decodable {
     let ready: Bool
     let serviceName: String?
@@ -107,6 +113,7 @@ final class BudsBridgeClient: ObservableObject {
     @Published private(set) var settings: BudsDeviceSettings
     @Published private(set) var isSending = false
     @Published private(set) var lastCommandMessage: String?
+    @Published private(set) var connectionIssue: BridgeConnectionIssue?
     @Published private(set) var leftBattery: Int?
     @Published private(set) var rightBattery: Int?
     @Published private(set) var caseBattery: Int?
@@ -140,9 +147,20 @@ final class BudsBridgeClient: ObservableObject {
     private var readyEndpoint: NWEndpoint?
     private var pollTask: Task<Void, Never>?
     private var statusRequestGeneration = 0
+    private var statusRequestInFlight = false
+    private var statusRefreshPending = false
+    private var consecutiveStatusFailures = 0
 
     var canControl: Bool {
         !isSending && (isDemoMode || (phase.isReady && endpoint == readyEndpoint))
+    }
+
+    var hasDiscoveredBridge: Bool {
+        endpoint != nil
+    }
+
+    var shouldShowPairingControls: Bool {
+        !isDemoMode && endpoint != nil && !phase.isReady
     }
 
     var selectedNoiseMode: NoiseControlMode? { settings.noiseMode }
@@ -177,12 +195,17 @@ final class BudsBridgeClient: ObservableObject {
         readyEndpoint = nil
         findMyEarbudsActive = false
         hasExtendedState = false
+        connectionIssue = nil
+        lastCommandMessage = nil
+        statusRefreshPending = false
+        consecutiveStatusFailures = 0
         statusRequestGeneration += 1
         phase = .searching
         startDiscovery()
     }
 
     func refreshStatus() async {
+        guard !isDemoMode else { return }
         guard let endpoint else {
             phase = .searching
             return
@@ -192,6 +215,13 @@ final class BudsBridgeClient: ObservableObject {
             phase = .pairing(endpoint.displayName)
             return
         }
+        guard !statusRequestInFlight else {
+            statusRefreshPending = true
+            return
+        }
+        statusRequestInFlight = true
+        defer { finishStatusRequest() }
+
         let requestedEndpoint = endpoint
         statusRequestGeneration += 1
         let generation = statusRequestGeneration
@@ -210,6 +240,8 @@ final class BudsBridgeClient: ObservableObject {
             rightBattery = status.rightBattery
             caseBattery = status.caseBattery
             apply(status)
+            connectionIssue = nil
+            consecutiveStatusFailures = 0
             if status.ready {
                 readyEndpoint = requestedEndpoint
                 phase = .ready(serviceName)
@@ -221,23 +253,88 @@ final class BudsBridgeClient: ObservableObject {
             }
         } catch BridgeHTTP.RequestError.authentication {
             guard self.endpoint == requestedEndpoint, statusRequestGeneration == generation else { return }
+            consecutiveStatusFailures = 0
             readyEndpoint = nil
             hasExtendedState = false
             phase = .pairing(endpoint.displayName)
+            connectionIssue = nil
             lastCommandMessage = "配对密钥不正确"
         } catch BridgeHTTP.RequestError.server(let status, let message) where status == 401 {
             guard self.endpoint == requestedEndpoint, statusRequestGeneration == generation else { return }
+            consecutiveStatusFailures = 0
             readyEndpoint = nil
             hasExtendedState = false
             phase = .pairing(endpoint.displayName)
+            connectionIssue = nil
             lastCommandMessage = message
-        } catch {
+        } catch BridgeHTTP.RequestError.localNetworkDenied(let detail) {
             guard self.endpoint == requestedEndpoint, statusRequestGeneration == generation else { return }
+            guard shouldPresentTransientFailure() else { return }
+            readyEndpoint = nil
+            hasExtendedState = false
+            phase = .unavailable("iPhone 未允许本地网络访问")
+            lastCommandMessage = nil
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "在“设置 > 隐私与安全性 > 本地网络”中允许“Buds 控制台”，返回后点重新发现。",
+                technicalDetail: detail,
+                offersSettingsShortcut: true
+            )
+        } catch BridgeHTTP.RequestError.connection(let detail) {
+            guard self.endpoint == requestedEndpoint, statusRequestGeneration == generation else { return }
+            guard shouldPresentTransientFailure() else { return }
             readyEndpoint = nil
             hasExtendedState = false
             phase = .unavailable("Mac 桥接暂不可用")
-            lastCommandMessage = error.localizedDescription
+            lastCommandMessage = nil
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "已发现 Mac 桥接，但连接没有建立。请检查本地网络权限、两台设备是否在同一 Wi-Fi，并确认 Mac 防火墙未拦截 BudsBridge。",
+                technicalDetail: detail,
+                offersSettingsShortcut: true
+            )
+        } catch BridgeHTTP.RequestError.timedOut {
+            guard self.endpoint == requestedEndpoint, statusRequestGeneration == generation else { return }
+            guard shouldPresentTransientFailure() else { return }
+            readyEndpoint = nil
+            hasExtendedState = false
+            phase = .unavailable("连接 Mac 桥接超时")
+            lastCommandMessage = nil
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "已发现 Mac 桥接，但请求没有完成。请先检查 iPhone 的本地网络权限，再确认同一 Wi-Fi 和 Mac 防火墙后重试。",
+                technicalDetail: BridgeHTTP.RequestError.timedOut.localizedDescription,
+                offersSettingsShortcut: true
+            )
+        } catch {
+            guard self.endpoint == requestedEndpoint, statusRequestGeneration == generation else { return }
+            guard shouldPresentTransientFailure() else { return }
+            readyEndpoint = nil
+            hasExtendedState = false
+            phase = .unavailable("Mac 桥接暂不可用")
+            lastCommandMessage = nil
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "桥接状态请求失败。请重新发现；如果问题持续，请重启 Mac 上的 BudsBridge。",
+                technicalDetail: error.localizedDescription,
+                offersSettingsShortcut: false
+            )
         }
+    }
+
+    private func finishStatusRequest() {
+        statusRequestInFlight = false
+        guard statusRefreshPending, !isDemoMode else {
+            statusRefreshPending = false
+            return
+        }
+        statusRefreshPending = false
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            await self?.refreshStatus()
+        }
+    }
+
+    private func shouldPresentTransientFailure() -> Bool {
+        consecutiveStatusFailures += 1
+        return !phase.isReady || consecutiveStatusFailures >= 2
     }
 
     func setNoiseMode(_ mode: NoiseControlMode) async {
@@ -421,6 +518,13 @@ final class BudsBridgeClient: ObservableObject {
             lastCommandMessage = "请粘贴完整的 32 位配对密钥"
             return
         }
+        guard let endpoint else {
+            lastCommandMessage = "尚未发现 Mac 桥接，请确认两台设备在同一 Wi-Fi"
+            return
+        }
+        connectionIssue = nil
+        lastCommandMessage = nil
+        phase = .connecting(endpoint.displayName)
         Task { await refreshStatus() }
     }
 
@@ -428,17 +532,22 @@ final class BudsBridgeClient: ObservableObject {
         guard enabled != isDemoMode else { return }
         isDemoMode = enabled
         UserDefaults.standard.set(enabled, forKey: Self.demoModeKey)
+        statusRefreshPending = false
+        consecutiveStatusFailures = 0
+        statusRequestGeneration += 1
         if enabled {
             browser?.cancel()
             pollTask?.cancel()
             endpoint = nil
             readyEndpoint = nil
+            connectionIssue = nil
             activateDemoMode()
         } else {
             leftBattery = nil
             rightBattery = nil
             caseBattery = nil
             hasExtendedState = false
+            connectionIssue = nil
             phase = .searching
             startDiscovery()
         }
@@ -492,10 +601,14 @@ final class BudsBridgeClient: ObservableObject {
                 guard let self, self.browser === browser else { return }
                 switch state {
                 case .ready:
-                    if self.endpoint == nil { self.phase = .searching }
+                    if self.endpoint == nil {
+                        self.phase = .searching
+                        self.connectionIssue = nil
+                    }
+                case .waiting(let error):
+                    self.presentDiscoveryIssue(error, failed: false)
                 case .failed(let error):
-                    self.phase = .unavailable("桥接发现失败")
-                    self.lastCommandMessage = error.localizedDescription
+                    self.presentDiscoveryIssue(error, failed: true)
                 case .cancelled:
                     break
                 default:
@@ -514,9 +627,14 @@ final class BudsBridgeClient: ObservableObject {
             Task { @MainActor in
                 guard let self, self.browser === browser else { return }
                 guard !ordered.isEmpty else {
+                    if self.phase.isReady, self.endpoint == self.readyEndpoint {
+                        return
+                    }
                     self.endpoint = nil
                     self.readyEndpoint = nil
+                    self.consecutiveStatusFailures = 0
                     self.statusRequestGeneration += 1
+                    self.connectionIssue = nil
                     self.phase = .searching
                     return
                 }
@@ -525,8 +643,10 @@ final class BudsBridgeClient: ObservableObject {
                 self.endpoint = first.endpoint
                 if changed {
                     self.readyEndpoint = nil
+                    self.consecutiveStatusFailures = 0
                     self.statusRequestGeneration += 1
                     self.phase = .connecting(first.endpoint.displayName)
+                    self.connectionIssue = nil
                     self.beginPolling()
                 }
                 await self.refreshStatus()
@@ -536,11 +656,38 @@ final class BudsBridgeClient: ObservableObject {
         browser.start(queue: queue)
     }
 
+    private func presentDiscoveryIssue(_ error: NWError, failed: Bool) {
+        lastCommandMessage = nil
+        if phase.isReady, endpoint == readyEndpoint {
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "桥接发现暂时波动，当前控制链路仍可用；App 会继续用现有连接自动重试。",
+                technicalDetail: error.localizedDescription,
+                offersSettingsShortcut: error.indicatesLocalNetworkDenial
+            )
+            return
+        }
+        if error.indicatesLocalNetworkDenial {
+            phase = .unavailable("iPhone 未允许本地网络访问")
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "在“设置 > 隐私与安全性 > 本地网络”中允许“Buds 控制台”，返回后点重新发现。",
+                technicalDetail: error.localizedDescription,
+                offersSettingsShortcut: true
+            )
+        } else {
+            phase = .unavailable(failed ? "桥接发现失败" : "桥接发现正在等待网络")
+            connectionIssue = BridgeConnectionIssue(
+                guidance: "请检查 iPhone 的本地网络权限，并确认 Mac 与 iPhone 在同一 Wi-Fi、BudsBridge 正在运行，然后重新发现。",
+                technicalDetail: error.localizedDescription,
+                offersSettingsShortcut: true
+            )
+        }
+    }
+
     private func beginPolling() {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { return }
                 if case .pairing = self?.phase { continue }
                 await self?.refreshStatus()
@@ -705,9 +852,10 @@ final class BudsBridgeClient: ObservableObject {
     }
 }
 
-private enum BridgeHTTP {
+enum BridgeHTTP {
     enum RequestError: LocalizedError {
         case authentication
+        case localNetworkDenied(String)
         case connection(String)
         case invalidResponse
         case server(Int, String)
@@ -716,6 +864,7 @@ private enum BridgeHTTP {
         var errorDescription: String? {
             switch self {
             case .authentication: "配对密钥不正确"
+            case .localNetworkDenied: "iPhone 未允许本地网络访问"
             case .connection(let message): message
             case .invalidResponse: "Mac 桥接返回了无效响应"
             case .server(_, let message): message
@@ -725,6 +874,9 @@ private enum BridgeHTTP {
 
         static func from(_ error: NWError) -> RequestError {
             if case .tls = error { return .authentication }
+            if error.indicatesLocalNetworkDenial {
+                return .localNetworkDenied(error.localizedDescription)
+            }
             return .connection(error.localizedDescription)
         }
     }
@@ -769,7 +921,7 @@ private enum BridgeHTTP {
                     break
                 }
             }
-            queue.asyncAfter(deadline: .now() + 5) { [self] in
+            queue.asyncAfter(deadline: .now() + 4) { [self] in
                 finish(.failure(RequestError.timedOut))
             }
             connection.start(queue: queue)
@@ -784,10 +936,19 @@ private enum BridgeHTTP {
                     }
                     response.append(data)
                 }
+                do {
+                    if let body = try BridgeHTTP.completeResponseBody(from: response) {
+                        finish(.success(body))
+                        return
+                    }
+                } catch {
+                    finish(.failure(error))
+                    return
+                }
                 if let error {
                     finish(.failure(RequestError.from(error)))
                 } else if isComplete {
-                    finish(Result { try BridgeHTTP.parseResponse(response) })
+                    finish(.failure(RequestError.invalidResponse))
                 } else {
                     receiveNext()
                 }
@@ -846,6 +1007,28 @@ private enum BridgeHTTP {
         return Data((lines.joined(separator: "\r\n") + "\r\n\r\n").utf8) + payload
     }
 
+    static func completeResponseBody(from data: Data) throws -> Data? {
+        let separator = Data("\r\n\r\n".utf8)
+        guard let range = data.range(of: separator) else { return nil }
+        guard let header = String(data: data[..<range.lowerBound], encoding: .utf8) else {
+            throw RequestError.invalidResponse
+        }
+
+        let contentLengthLine = header.components(separatedBy: "\r\n").first {
+            $0.lowercased().hasPrefix("content-length:")
+        }
+        guard let contentLengthLine,
+              let contentLength = Int(contentLengthLine.dropFirst("content-length:".count)
+                .trimmingCharacters(in: .whitespaces)),
+              (0 ... 64 * 1024).contains(contentLength) else {
+            throw RequestError.invalidResponse
+        }
+
+        let responseLength = range.upperBound + contentLength
+        guard data.count >= responseLength else { return nil }
+        return try parseResponse(Data(data.prefix(responseLength)))
+    }
+
     private static func parseResponse(_ data: Data) throws -> Data {
         let separator = Data("\r\n\r\n".utf8)
         guard let range = data.range(of: separator),
@@ -865,6 +1048,20 @@ private enum BridgeHTTP {
             throw RequestError.server(status, message ?? "Mac 桥接返回错误 \(status)")
         }
         return body
+    }
+}
+
+private extension NWError {
+    var indicatesLocalNetworkDenial: Bool {
+        switch self {
+        case .posix(let code):
+            return code == .EPERM || code == .EACCES
+        case .dns(let code):
+            // DNS-SD reports local-network privacy denial as PolicyDenied (-65570).
+            return code == -65_570
+        default:
+            return false
+        }
     }
 }
 
