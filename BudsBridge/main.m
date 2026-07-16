@@ -102,6 +102,52 @@ static NSString *GeneratePairingSecret(void) {
     return secret;
 }
 
+static NSSet<NSString *> *BudsBooleanStatusKeys(void) {
+    static NSSet<NSString *> *keys;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        keys = [NSSet setWithArray:@[
+            @"ready",
+            @"hasExtendedState",
+            @"noiseReductionHigh",
+            @"ambientCustomizationEnabled",
+            @"voiceDetectEnabled",
+            @"noiseControlWithOneEarbud",
+            @"touchLocked",
+            @"singleTapEnabled",
+            @"doubleTapEnabled",
+            @"tripleTapEnabled",
+            @"touchAndHoldEnabled",
+            @"doubleTapCallEnabled",
+            @"touchAndHoldCallEnabled",
+            @"edgeDoubleTapVolume",
+            @"seamlessConnection",
+            @"sidetoneEnabled",
+            @"callPathControlEnabled",
+            @"extraClearCallEnabled",
+            @"extraHighAmbientEnabled",
+            @"spatialAudioEnabled",
+            @"spatialHeadTrackingEnabled",
+            @"autoPauseResumeEnabled",
+            @"adaptiveVolumeEnabled",
+            @"sirenDetectEnabled",
+            @"hotCommandEnabled",
+            @"adaptSoundEnabled",
+            @"fitTestActive"
+        ]];
+    });
+    return keys;
+}
+
+static void BudsNormalizeBooleanStatus(NSMutableDictionary *payload) {
+    for (NSString *key in BudsBooleanStatusKeys()) {
+        id value = payload[key];
+        if ([value isKindOfClass:NSNumber.class]) {
+            payload[key] = [NSNumber numberWithBool:[value boolValue]];
+        }
+    }
+}
+
 static BOOL IntegerInRange(id value, NSInteger minimum, NSInteger maximum) {
     if (![value isKindOfClass:NSNumber.class]) { return NO; }
     NSNumber *number = value;
@@ -794,6 +840,7 @@ requiresAcknowledgement:(BOOL)requiresAcknowledgement
                 @"caseBattery": self.transport.caseBattery >= 0 ? @(self.transport.caseBattery) : NSNull.null
             } mutableCopy];
             [payload addEntriesFromDictionary:self.transport.deviceState];
+            BudsNormalizeBooleanStatus(payload);
         });
         *status = 200;
         return payload;
@@ -1075,6 +1122,19 @@ static int RunProtocolSelfTest(void) {
             NSLog(@"SELF-TEST FAIL: invalid command accepted %@", request);
             return 12;
         }
+    }
+
+    NSMutableDictionary *status = [@{
+        @"singleTapEnabled": @1,
+        @"voiceDetectEnabled": @0,
+        @"revision": @1
+    } mutableCopy];
+    BudsNormalizeBooleanStatus(status);
+    if (CFGetTypeID((__bridge CFTypeRef)status[@"singleTapEnabled"]) != CFBooleanGetTypeID() ||
+        CFGetTypeID((__bridge CFTypeRef)status[@"voiceDetectEnabled"]) != CFBooleanGetTypeID() ||
+        CFGetTypeID((__bridge CFTypeRef)status[@"revision"]) == CFBooleanGetTypeID()) {
+        NSLog(@"SELF-TEST FAIL: status booleans were not normalized");
+        return 13;
     }
 
     NSLog(@"Protocol self-test passed: %lu vectors and %lu rejection cases",

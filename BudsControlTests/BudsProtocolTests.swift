@@ -174,4 +174,32 @@ final class BudsProtocolTests: XCTestCase {
             XCTAssertEqual(message, "配对密钥不正确")
         }
     }
+
+    func testBridgeStatusAcceptsBooleanAndIntegerSwitches() throws {
+        let payload = Data(#"""
+        {
+            "ready": true,
+            "hasExtendedState": 1,
+            "noiseReductionHigh": 0,
+            "singleTapEnabled": true,
+            "seamlessConnection": 1,
+            "fitTestActive": null
+        }
+        """#.utf8)
+
+        let decoded = try JSONDecoder().decode(BridgeStatusPayload.self, from: payload)
+
+        XCTAssertEqual(decoded.hasExtendedState, true)
+        XCTAssertEqual(decoded.noiseReductionHigh, false)
+        XCTAssertEqual(decoded.singleTapEnabled, true)
+        XCTAssertEqual(decoded.seamlessConnection, true)
+        XCTAssertNil(decoded.voiceDetectEnabled)
+        XCTAssertNil(decoded.fitTestActive)
+    }
+
+    func testBridgeStatusRejectsInvalidIntegerSwitch() {
+        let payload = Data(#"{"ready":true,"singleTapEnabled":2}"#.utf8)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(BridgeStatusPayload.self, from: payload))
+    }
 }

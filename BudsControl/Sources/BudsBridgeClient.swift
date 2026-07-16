@@ -50,7 +50,41 @@ struct BridgeConnectionIssue: Equatable {
     let offersSettingsShortcut: Bool
 }
 
-private struct BridgeStatusPayload: Decodable {
+@propertyWrapper
+struct BridgeBoolean: Decodable {
+    var wrappedValue: Bool?
+
+    init() {
+        wrappedValue = nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            wrappedValue = nil
+        } else if let value = try? container.decode(Bool.self) {
+            wrappedValue = value
+        } else if let value = try? container.decode(Int.self), value == 0 || value == 1 {
+            wrappedValue = value == 1
+        } else {
+            throw DecodingError.typeMismatch(
+                Bool.self,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Expected a Boolean or the integer 0 or 1"
+                )
+            )
+        }
+    }
+}
+
+extension KeyedDecodingContainer {
+    func decode(_ type: BridgeBoolean.Type, forKey key: Key) throws -> BridgeBoolean {
+        try decodeIfPresent(type, forKey: key) ?? BridgeBoolean()
+    }
+}
+
+struct BridgeStatusPayload: Decodable {
     let ready: Bool
     let serviceName: String?
     let deviceName: String?
@@ -58,43 +92,43 @@ private struct BridgeStatusPayload: Decodable {
     let leftBattery: Int?
     let rightBattery: Int?
     let caseBattery: Int?
-    let hasExtendedState: Bool?
+    @BridgeBoolean var hasExtendedState: Bool?
     let revision: Int?
     let noiseMode: Int?
     let equalizer: Int?
     let ambientVolume: Int?
-    let noiseReductionHigh: Bool?
-    let ambientCustomizationEnabled: Bool?
+    @BridgeBoolean var noiseReductionHigh: Bool?
+    @BridgeBoolean var ambientCustomizationEnabled: Bool?
     let ambientVolumeLeft: Int?
     let ambientVolumeRight: Int?
     let ambientTone: Int?
-    let voiceDetectEnabled: Bool?
+    @BridgeBoolean var voiceDetectEnabled: Bool?
     let voiceDetectTimeout: Int?
-    let noiseControlWithOneEarbud: Bool?
-    let touchLocked: Bool?
-    let singleTapEnabled: Bool?
-    let doubleTapEnabled: Bool?
-    let tripleTapEnabled: Bool?
-    let touchAndHoldEnabled: Bool?
-    let doubleTapCallEnabled: Bool?
-    let touchAndHoldCallEnabled: Bool?
+    @BridgeBoolean var noiseControlWithOneEarbud: Bool?
+    @BridgeBoolean var touchLocked: Bool?
+    @BridgeBoolean var singleTapEnabled: Bool?
+    @BridgeBoolean var doubleTapEnabled: Bool?
+    @BridgeBoolean var tripleTapEnabled: Bool?
+    @BridgeBoolean var touchAndHoldEnabled: Bool?
+    @BridgeBoolean var doubleTapCallEnabled: Bool?
+    @BridgeBoolean var touchAndHoldCallEnabled: Bool?
     let leftTouchAction: Int?
     let rightTouchAction: Int?
-    let edgeDoubleTapVolume: Bool?
+    @BridgeBoolean var edgeDoubleTapVolume: Bool?
     let stereoBalance: Int?
-    let seamlessConnection: Bool?
-    let sidetoneEnabled: Bool?
-    let callPathControlEnabled: Bool?
-    let extraClearCallEnabled: Bool?
-    let extraHighAmbientEnabled: Bool?
-    let spatialAudioEnabled: Bool?
-    let autoPauseResumeEnabled: Bool?
-    let adaptiveVolumeEnabled: Bool?
-    let sirenDetectEnabled: Bool?
+    @BridgeBoolean var seamlessConnection: Bool?
+    @BridgeBoolean var sidetoneEnabled: Bool?
+    @BridgeBoolean var callPathControlEnabled: Bool?
+    @BridgeBoolean var extraClearCallEnabled: Bool?
+    @BridgeBoolean var extraHighAmbientEnabled: Bool?
+    @BridgeBoolean var spatialAudioEnabled: Bool?
+    @BridgeBoolean var autoPauseResumeEnabled: Bool?
+    @BridgeBoolean var adaptiveVolumeEnabled: Bool?
+    @BridgeBoolean var sirenDetectEnabled: Bool?
     let lightingControl: Int?
-    let hotCommandEnabled: Bool?
-    let adaptSoundEnabled: Bool?
-    let fitTestActive: Bool?
+    @BridgeBoolean var hotCommandEnabled: Bool?
+    @BridgeBoolean var adaptSoundEnabled: Bool?
+    @BridgeBoolean var fitTestActive: Bool?
     let fitTestLeft: Int?
     let fitTestRight: Int?
     let stateUpdatedAt: TimeInterval?
